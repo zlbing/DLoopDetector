@@ -29,8 +29,9 @@ using namespace std;
 // ----------------------------------------------------------------------------
 
 static const char *VOC_FILE = "./resources/brief_k10L6.voc.gz";
-static const char *IMAGE_DIR = "./resources/images";
-static const char *POSE_FILE = "./resources/pose.txt";
+static const char *IMAGE_DIR = "/home/zlb/zzz/test_global_relocalization/wuhan-GS101-0100-L7M-H000/2021-11-18/image_raw";
+static const char *POSE_FILE =
+    "/home/zlb/zzz/test_global_relocalization/wuhan-GS101-0100-L7M-H000/2021-11-18/log/image_poses.txt";
 static const int IMAGE_W = 640; // image size
 static const int IMAGE_H = 480;
 static const char *BRIEF_PATTERN_FILE = "./resources/brief_pattern.yml";

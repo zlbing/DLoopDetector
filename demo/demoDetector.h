@@ -46,6 +46,13 @@ public:
 };
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+struct PoseTime {
+  std::vector<double> x;
+  std::vector<double> y;
+  std::vector<double> yaw;
+  std::vector<double> ts;
+  std::vector<string> image_id;
+};                                                                                           
 
 /// @param TVocabulary vocabulary class (e.g: BriefVocabulary)
 /// @param TDetector detector class (e.g: BriefLoopDetector)
@@ -65,8 +72,8 @@ public:
    */
   demoDetector(const std::string &vocfile, const std::string &imagedir,
     const std::string &posefile, int width, int height, bool show);
-    
-  ~demoDetector(){}
+
+  ~demoDetector() { m_metrics_write.close(); }
 
   /**
    * Runs the demo
@@ -84,8 +91,12 @@ protected:
    * @param xs
    * @param ys
    */
-  void readPoseFile(const char *filename, std::vector<double> &xs, 
-    std::vector<double> &ys) const;
+ void readPoseFile(const char *filename, std::vector<double> &xs, std::vector<double> &ys, std::vector<double> &yaws,
+                   std::vector<double> &ts_, std::vector<string> &image_id) const;
+
+ vector<string> readImageFile(const PoseTime &m_all_poses, const string &image_path);
+
+ void writeMetrics(const DetectionResult& result, const int index);
 
 protected:
 
@@ -95,6 +106,9 @@ protected:
   int m_width;
   int m_height;
   bool m_show;
+  PoseTime m_all_poses;
+  std::map<EntryId, int> m_image_index_remap;
+  ofstream m_metrics_write;
 };
 
 // ---------------------------------------------------------------------------
@@ -106,6 +120,9 @@ demoDetector<TVocabulary, TDetector, TDescriptor>::demoDetector
   : m_vocfile(vocfile), m_imagedir(imagedir), m_posefile(posefile),
     m_width(width), m_height(height), m_show(show)
 {
+  std::string filename = m_imagedir + "/../DLoopDetector/Metrics_LoopMetrics";
+  std::cout<<"Write Metrics to "<<filename<<std::endl;
+  m_metrics_write.open(filename, ios::trunc);
 }
 
 // ---------------------------------------------------------------------------
@@ -171,14 +188,16 @@ void demoDetector<TVocabulary, TDetector, TDescriptor>::run
   vector<cv::KeyPoint> keys;
   vector<TDescriptor> descriptors;
 
-  // load image filenames  
-  vector<string> filenames = 
-    DUtils::FileFunctions::Dir(m_imagedir.c_str(), ".png", true);
-  
+  // // load image filenames  
+  // vector<string> filenames = 
+  //   DUtils::FileFunctions::Dir(m_imagedir.c_str(), ".png", true);
+  // std::cout<<"load image file size="<<filenames.size()<<std::endl;
   // load robot poses
-  vector<double> xs, ys;
-  readPoseFile(m_posefile.c_str(), xs, ys);
-  
+  readPoseFile(m_posefile.c_str(), m_all_poses.x, m_all_poses.y, m_all_poses.yaw, m_all_poses.ts, m_all_poses.image_id);
+  std::cout<<"load pose size="<<m_all_poses.x.size()<<std::endl;
+  // load image filenames
+  vector<string> filenames = readImageFile(m_all_poses, m_imagedir);
+  std::cout << "load image file size=" << filenames.size() << std::endl;
   // we can allocate memory for the expected number of images
   detector.allocate(filenames.size());
   
@@ -190,16 +209,15 @@ void demoDetector<TVocabulary, TDetector, TDescriptor>::run
   DUtilsCV::Drawing::Plot::Style loop_style('r', 2); // color, thickness
   
   DUtilsCV::Drawing::Plot implot(240, 320,
-    - *std::max_element(xs.begin(), xs.end()),
-    - *std::min_element(xs.begin(), xs.end()),
-    *std::min_element(ys.begin(), ys.end()),
-    *std::max_element(ys.begin(), ys.end()), 20);
+    - *std::max_element(m_all_poses.x.begin(), m_all_poses.x.end()),
+    - *std::min_element(m_all_poses.x.begin(), m_all_poses.x.end()),
+    *std::min_element(m_all_poses.y.begin(), m_all_poses.y.end()),
+    *std::max_element(m_all_poses.y.begin(), m_all_poses.y.end()), 20);
   
   // prepare profiler to measure times
   DUtils::Profiler profiler;
   
   int count = 0;
-  
   // go
   for(unsigned int i = 0; i < filenames.size(); ++i)
   {
@@ -222,8 +240,9 @@ void demoDetector<TVocabulary, TDetector, TDescriptor>::run
     
     profiler.profile("detection");
     detector.detectLoop(keys, descriptors, result);
+    m_image_index_remap[result.query] = i;
     profiler.stop();
-    
+    writeMetrics(result, i);
     if(result.detection())
     {
       cout << "- Loop found with image " << result.match << "!"
@@ -280,10 +299,10 @@ void demoDetector<TVocabulary, TDetector, TDescriptor>::run
     if(m_show && i > 0)
     {
       if(result.detection())
-        implot.line(-xs[i-1], ys[i-1], -xs[i], ys[i], loop_style);
+        implot.line(-m_all_poses.x[i - 1], m_all_poses.y[i - 1], -m_all_poses.x[i], m_all_poses.y[i], loop_style);
       else
-        implot.line(-xs[i-1], ys[i-1], -xs[i], ys[i], normal_style);
-      
+        implot.line(-m_all_poses.x[i - 1], m_all_poses.y[i - 1], -m_all_poses.x[i], m_all_poses.y[i], normal_style);
+
       DUtilsCV::GUI::showImage(implot.getImage(), true, &winplot, 10); 
     }
   }
@@ -311,11 +330,11 @@ void demoDetector<TVocabulary, TDetector, TDescriptor>::run
 
 // ---------------------------------------------------------------------------
 
-template<class TVocabulary, class TDetector, class TDescriptor>
-void demoDetector<TVocabulary, TDetector, TDescriptor>::readPoseFile
-  (const char *filename, std::vector<double> &xs, std::vector<double> &ys)
-  const
-{
+template <class TVocabulary, class TDetector, class TDescriptor>
+void demoDetector<TVocabulary, TDetector, TDescriptor>::readPoseFile(const char *filename, std::vector<double> &xs,
+                                                                     std::vector<double> &ys, std::vector<double> &yaws,
+                                                                     std::vector<double> &ts_,
+                                                                     std::vector<string> &image_id) const {
   xs.clear();
   ys.clear();
   
@@ -323,18 +342,143 @@ void demoDetector<TVocabulary, TDetector, TDescriptor>::readPoseFile
   
   string s;
   double ts, x, y, t;
+
+  auto split_string = [](const std::string &s, std::vector<std::string> &v, const std::string &c) {
+    std::string::size_type pos1, pos2;
+    pos2 = s.find(c);
+    pos1 = 0;
+    while (std::string::npos != pos2) {
+      v.push_back(s.substr(pos1, pos2 - pos1));
+
+      pos1 = pos2 + c.size();
+      pos2 = s.find(c, pos1);
+    }
+    if (pos1 != s.length()) v.push_back(s.substr(pos1));
+  };
+
   while(!f.eof())
   {
     getline(f, s);
     if(!f.eof() && !s.empty())
     {
-      sscanf(s.c_str(), "%lf, %lf, %lf, %lf", &ts, &x, &y, &t);
-      xs.push_back(x);
-      ys.push_back(y);
+      if(s[0] == '#') {
+        continue;
+      }
+      std::vector<string>string_vec;
+      //timestamp,sensor_id,image_id,x,y,z,qw,qx,qy,qz
+      split_string(s, string_vec, ",");
+      // sscanf(s.c_str(), "%lf, %lf, %lf, %lf", &ts, &x, &y, &t);
+      xs.push_back(atof(string_vec[3].c_str()));
+      ys.push_back(atof(string_vec[4].c_str()));
+      ts_.push_back(atof(string_vec[0].c_str()));
+      yaws.push_back(atof(string_vec[6].c_str()));
+      image_id.push_back(string_vec[2].c_str());
     }
   }
   
   f.close();
+}
+template <class TVocabulary, class TDetector, class TDescriptor>
+vector<string> demoDetector<TVocabulary, TDetector, TDescriptor>::readImageFile(const PoseTime &m_all_poses,
+                                                                                const string &image_path) {
+  vector<string> filenames;
+  for (int i = 0; i < m_all_poses.image_id.size(); i++) {
+    filenames.push_back(image_path + "/" + m_all_poses.image_id[i]+".png");
+  }
+  return filenames;
+}
+
+template <class TVocabulary, class TDetector, class TDescriptor>
+void demoDetector<TVocabulary, TDetector, TDescriptor>::writeMetrics(const DetectionResult &result, const int index) {
+    auto PoseToString = [](const double x, const double y, const double w, std::string &result) {
+    result.append("{ t: [");
+    result.append(std::to_string(x));
+    result.append(", ");
+    result.append(std::to_string(y));
+    result.append(", ");
+    result.append(std::to_string(0));
+    result.append("], q: [");
+    result.append(std::to_string(w));
+    result.append(", ");
+    result.append(std::to_string(0));
+    result.append(", ");
+    result.append(std::to_string(0));
+    result.append(", ");
+    result.append(std::to_string(sin(acos(w))));
+    result.append("] }");
+  };
+
+  auto ImageIdToString = [](const string &image_id, std::string &result) {
+    std::vector<std::string> str_vec;
+    {
+      std::string c = "_";
+      std::string::size_type pos1, pos2;
+      pos2 = image_id.find(c);
+      pos1 = 0;
+      while (std::string::npos != pos2) {
+        str_vec.push_back(image_id.substr(pos1, pos2 - pos1));
+
+        pos1 = pos2 + c.size();
+        pos2 = image_id.find(c, pos1);
+      }
+      if (pos1 != image_id.length()) str_vec.push_back(image_id.substr(pos1));
+    }
+    result.append("{ \"trajectory_id\" : ");
+    result.append(str_vec[0]);
+    result.append(" , \"image_index\" : ");
+    result.append(str_vec[1]);
+    result.append("}");
+  };
+
+  std::string out;
+  out.append("{\"LoopMetrics\" : ");
+
+
+  out.append(" { ");
+  out.append(" \"time\" : ");
+  out.append(std::to_string(m_all_poses.ts[index]));
+  out.append(" , \"looped_pose\" : ");
+  if (result.detection()) {
+    int match_id = m_image_index_remap[result.match];
+    std::string pose_str;
+    PoseToString(m_all_poses.x[match_id], m_all_poses.y[match_id], m_all_poses.yaw[match_id], pose_str);
+    out.append(pose_str);
+  } else {
+    std::string pose_str;
+    PoseToString(0.0, 0.0, 1.0, pose_str);
+    out.append(pose_str);
+  }
+
+  out.append(" , \"confidence\" : ");
+  out.append(std::to_string(1));
+
+  out.append(" , \"current_pose\" : ");
+  int cur_id = m_image_index_remap[result.query];
+  std::string pose_str;
+  PoseToString(m_all_poses.x[cur_id], m_all_poses.y[cur_id], m_all_poses.yaw[cur_id], pose_str);
+  out.append(pose_str);
+
+  out.append(" , \"image_id\" : ");
+  std::string image_str;
+  ImageIdToString(m_all_poses.image_id[cur_id], image_str);
+  out.append(image_str);
+
+  out.append(" , \"looped_imaged_id\" : ");
+  if(result.detection()) {
+    int match_id = m_image_index_remap[result.match];
+    std::string image_str;
+    ImageIdToString(m_all_poses.image_id[match_id], image_str);
+    out.append(image_str);
+  } else {
+    std::string image_str;
+    ImageIdToString("-1_-1", image_str);
+    out.append(image_str);
+  }
+  out.append(" } ");
+
+  out.append(" }\n");
+
+  m_metrics_write << out;
 }
 
 // ---------------------------------------------------------------------------
